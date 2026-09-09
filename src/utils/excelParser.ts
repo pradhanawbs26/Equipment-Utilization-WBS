@@ -374,11 +374,11 @@ export function parseTimesheetWorkbook(buffer: ArrayBuffer | Uint8Array, fileNam
     const shift = String(rawShift ?? '1').trim();
     const operator = String(rawOperator || '-').trim();
     const activity = String(rawActivity || (rawActivityCode ? String(rawActivityCode) : 'General Operation')).trim();
-    const activityCode = rawActivityCode ? String(rawActivityCode).trim() : undefined;
-    const location = rawLocation ? String(rawLocation).trim() : undefined;
+    const activityCode = rawActivityCode ? String(rawActivityCode).trim() : '';
+    const location = rawLocation ? String(rawLocation).trim() : '';
     const startTime = formatExcelTime(rawStartTime, '06:00');
     const endTime = formatExcelTime(rawEndTime, '18:00');
-    const remark = rawRemark ? String(rawRemark).trim() : undefined;
+    const remark = rawRemark ? String(rawRemark).trim() : '';
 
     // Track null/string cleanup for Total HM
     if (
@@ -410,7 +410,7 @@ export function parseTimesheetWorkbook(buffer: ArrayBuffer | Uint8Array, fileNam
       id: `rec-${r}-${unit}-${dateFormatted}-${records.length}`,
       date: dateFormatted,
       shift,
-      operator,
+      operator: operator || '-',
       unit,
       activityCode,
       location,

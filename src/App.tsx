@@ -33,6 +33,11 @@ import {
   FIREBASE_PROJECT_ID
 } from './lib/firebase';
 import {
+  saveLocalDataset,
+  loadLocalDataset,
+  clearLocalDataset
+} from './utils/localPersistence';
+import {
   BarChart3,
   Gauge,
   Grid,
@@ -85,16 +90,43 @@ export default function App() {
     searchQuery: '',
   });
 
-  // Fetch initial records and batch history from Firebase Firestore
+  // Fetch initial records: prioritize instant local IndexedDB dataset, then query Firebase Firestore
   useEffect(() => {
     let isMounted = true;
 
-    async function loadFirestoreData() {
+    async function initializeFleetData() {
+      // 1. Instantly restore uploaded data from browser IndexedDB (eliminates data loss on refresh)
+      try {
+        const localData = await loadLocalDataset();
+        if (localData && localData.records && localData.records.length > 0 && isMounted) {
+          setRawRecords(localData.records);
+          if (localData.parseResult) {
+            setParseResult(localData.parseResult);
+          }
+          const dates = localData.records.map(r => r.date).filter(Boolean).sort();
+          const minD = dates[0] || '2025-08-01';
+          const maxD = dates[dates.length - 1] || '2025-08-14';
+          setFilters(prev => ({
+            ...prev,
+            startDate: minD,
+            endDate: maxD,
+            selectedSingleDate: minD,
+          }));
+          setCloudSyncMessage(`Memuat ${localData.records.length} record dari penyimpanan lokal browser (IndexedDB).`);
+        }
+      } catch (localErr) {
+        console.warn('Local storage retrieval notice:', localErr);
+      }
+
+      // 2. Fetch from Firebase Firestore in parallel
       setIsFirebaseLoading(true);
       try {
         const [cloudRecords, batches] = await Promise.all([
-          fetchRecordsFromFirestore(),
-          fetchBatchesFromFirestore()
+          fetchRecordsFromFirestore().catch(e => {
+            console.warn('Firestore fetchRecords warning:', e);
+            return [];
+          }),
+          fetchBatchesFromFirestore().catch(() => [])
         ]);
 
         if (!isMounted) return;
@@ -102,7 +134,7 @@ export default function App() {
         setUploadBatches(batches);
         setFirebaseRecordCount(cloudRecords.length);
 
-        // If cloud database has existing records, load them into the workspace
+        // If cloud database has records, synchronize with workspace and local storage
         if (cloudRecords.length > 0) {
           setRawRecords(cloudRecords);
 
@@ -111,7 +143,7 @@ export default function App() {
           const maxD = dates[dates.length - 1] || '2025-08-14';
 
           const latestBatch = batches[0];
-          setParseResult({
+          const cloudParseResult: ParseResult = {
             records: cloudRecords,
             sheetNameUsed: 'Timeshet Mobile',
             availableSheets: ['Timeshet Mobile (Cloud)'],
@@ -126,7 +158,11 @@ export default function App() {
             uploadTimestamp: latestBatch?.uploadedAt
               ? new Date(latestBatch.uploadedAt).toLocaleString('id-ID')
               : 'Synced from Firestore',
-          });
+          };
+
+          setParseResult(cloudParseResult);
+          // Keep local IndexedDB updated with cloud state
+          await saveLocalDataset(cloudRecords, cloudParseResult);
 
           setFilters(prev => ({
             ...prev,
@@ -135,21 +171,21 @@ export default function App() {
             selectedSingleDate: minD,
           }));
 
-          setCloudSyncMessage(`Terkoneksi ke Firebase: Berhasil memuat ${cloudRecords.length} record dari database cloud (${FIREBASE_PROJECT_ID}).`);
+          setCloudSyncMessage(`Terkoneksi ke Firebase: Berhasil menyinkronkan ${cloudRecords.length} record dari database cloud (${FIREBASE_PROJECT_ID}).`);
         } else {
           setCloudSyncMessage(`Firebase Firestore online (${FIREBASE_PROJECT_ID}). Database siap menerima unggahan Excel.`);
         }
       } catch (err: any) {
         console.warn('Firestore initial fetch notice:', err);
         if (isMounted) {
-          setCloudSyncMessage(`Firebase Firestore terkoneksi (${FIREBASE_PROJECT_ID}).`);
+          setCloudSyncMessage(`Penyimpanan aktif: Browser IndexedDB aman. Info Cloud: ${err?.message || 'Offline'}`);
         }
       } finally {
         if (isMounted) setIsFirebaseLoading(false);
       }
     }
 
-    loadFirestoreData();
+    initializeFleetData();
     return () => {
       isMounted = false;
     };
@@ -231,7 +267,7 @@ export default function App() {
     setFilters(prev => ({ ...prev, ...updated }));
   };
 
-  // File loaded event from uploader (with automatic Firebase Firestore persistence)
+  // File loaded event from uploader (with automatic IndexedDB & Firebase Firestore persistence)
   const handleDataLoaded = async (result: ParseResult) => {
     setRawRecords(result.records);
     setParseResult(result);
@@ -246,7 +282,14 @@ export default function App() {
       searchQuery: '',
     });
 
-    // Auto-save to Firebase Firestore database
+    // 1. Immediately persist to browser IndexedDB so it NEVER disappears on page refresh
+    try {
+      await saveLocalDataset(result.records, result);
+    } catch (saveLocalErr) {
+      console.warn('Local persistence warning:', saveLocalErr);
+    }
+
+    // 2. Auto-save to Firebase Firestore cloud database
     setIsFirebaseSaving(true);
     try {
       const { batchId, count } = await saveRecordsToFirestore(result.records, result.fileName);
@@ -257,11 +300,14 @@ export default function App() {
       setUploadBatches(batches);
 
       setCloudSyncMessage(
-        `✓ Tersimpan di Database Firebase Firestore (${FIREBASE_PROJECT_ID})! Batch ID: ${batchId.slice(0, 8)}... (${count} baris data).`
+        `✓ Tersimpan di Database Firebase Firestore (${FIREBASE_PROJECT_ID}) & Browser Storage! Batch ID: ${batchId.slice(0, 8)}... (${count} baris data).`
       );
     } catch (err: any) {
       console.error('Failed to save to Firebase Firestore:', err);
-      setCloudSyncMessage(`Peringatan: Gagal menyimpan ke Firebase Firestore (${err?.message || 'Error'}). Data tetap tersedia di sesi lokal.`);
+      const errDetail = err?.message || String(err);
+      setCloudSyncMessage(
+        `✓ Data tersimpan aman di browser (IndexedDB). Catatan Cloud Firebase: ${errDetail}`
+      );
     } finally {
       setIsFirebaseSaving(false);
     }
@@ -288,7 +334,7 @@ export default function App() {
         const maxD = dates[dates.length - 1] || '2025-08-14';
 
         const latestBatch = batches[0];
-        setParseResult({
+        const syncResult: ParseResult = {
           records: cloudRecords,
           sheetNameUsed: 'Timeshet Mobile',
           availableSheets: ['Timeshet Mobile (Cloud)'],
@@ -303,7 +349,10 @@ export default function App() {
           uploadTimestamp: latestBatch?.uploadedAt
             ? new Date(latestBatch.uploadedAt).toLocaleString('id-ID')
             : 'Synced from Firestore',
-        });
+        };
+
+        setParseResult(syncResult);
+        await saveLocalDataset(cloudRecords, syncResult);
 
         setFilters(prev => ({
           ...prev,
@@ -318,67 +367,79 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Error syncing from Firebase:', err);
-      setCloudSyncMessage(`Gagal menyinkronkan dari Firebase: ${err.message || 'Error'}`);
+      setCloudSyncMessage(`Gagal menyinkronkan dari Firebase: ${err?.message || 'Error'}`);
     } finally {
       setIsFirebaseLoading(false);
     }
   };
 
-  // Manual save current active records to Firestore
+  // Manual save current active records to Firestore & Local IndexedDB
   const handleSaveCurrentToFirebase = async () => {
     if (rawRecords.length === 0) return;
     setIsFirebaseSaving(true);
     setCloudSyncMessage(null);
     try {
       const fileName = parseResult?.fileName || 'Fleet_Timesheet_Manual_Save.xlsx';
+      
+      // Save locally first
+      if (parseResult) {
+        await saveLocalDataset(rawRecords, parseResult);
+      }
+
+      // Save to Firebase Firestore
       const { batchId, count } = await saveRecordsToFirestore(rawRecords, fileName);
       setFirebaseRecordCount(count);
 
       const batches = await fetchBatchesFromFirestore();
       setUploadBatches(batches);
 
-      setCloudSyncMessage(`Berhasil menyimpan ${count} record saat ini ke database Firebase Firestore (${FIREBASE_PROJECT_ID})!`);
+      setCloudSyncMessage(`Berhasil menyimpan ${count} record ke Firebase Firestore (${FIREBASE_PROJECT_ID}) & Browser Storage!`);
     } catch (err: any) {
       console.error('Failed to save to Firestore:', err);
-      setCloudSyncMessage(`Gagal menyimpan ke Firebase Firestore: ${err?.message || 'Error'}`);
+      setCloudSyncMessage(`Data tersimpan di browser. Info Cloud: ${err?.message || 'Error'}`);
     } finally {
       setIsFirebaseSaving(false);
     }
   };
 
-  // Clear all data in Firestore
+  // Clear all data in Firestore and local IndexedDB
   const handleClearFirebaseData = async () => {
     setIsFirebaseLoading(true);
     try {
-      await clearAllFirestoreData();
+      await Promise.all([
+        clearAllFirestoreData().catch(e => console.warn('Clear Firestore notice:', e)),
+        clearLocalDataset().catch(e => console.warn('Clear Local notice:', e))
+      ]);
       setUploadBatches([]);
       setFirebaseRecordCount(0);
-      setCloudSyncMessage('Semua data dan batch di Firebase Firestore telah berhasil dibersihkan.');
+      setCloudSyncMessage('Semua data di Firebase Firestore dan penyimpanan browser telah berhasil dibersihkan.');
     } catch (err: any) {
       console.error('Failed to clear Firestore:', err);
-      setCloudSyncMessage(`Gagal membersihkan database Firebase: ${err?.message || 'Error'}`);
+      setCloudSyncMessage(`Gagal membersihkan database: ${err?.message || 'Error'}`);
     } finally {
       setIsFirebaseLoading(false);
     }
   };
 
   // Reset back to pre-loaded sample
-  const handleResetToSample = () => {
+  const handleResetToSample = async () => {
     setRawRecords(INITIAL_SAMPLE_RECORDS);
-    setParseResult({
+    const sampleResult: ParseResult = {
       records: INITIAL_SAMPLE_RECORDS,
       sheetNameUsed: 'Timeshet Mobile',
       availableSheets: ['Timeshet Mobile'],
-      totalRowsRaw: 150,
-      validRows: 150,
+      totalRowsRaw: INITIAL_SAMPLE_RECORDS.length,
+      validRows: INITIAL_SAMPLE_RECORDS.length,
       cleanedNullHmCount: 3,
       dateRange: { min: '2025-08-01', max: '2025-08-14' },
-      categoriesDetected: ['Truck', 'HE', 'Support'],
+      categoriesDetected: ['DUMP TRUCK', 'EXCAVATOR', 'DOZER', 'MOTOR GRADER', 'WHEEL LOADER', 'WATER TRUCK'],
       unitsDetected: Array.from(new Set(INITIAL_SAMPLE_RECORDS.map(r => r.unit))).sort(),
       activitiesDetected: Array.from(new Set(INITIAL_SAMPLE_RECORDS.map(r => r.activity))).sort(),
-      fileName: 'Pit04_Seam_Dispatch_Timesheet_Aug2025.xlsx',
+      fileName: 'Sample_Timesheet_Aug2025.xlsx',
       uploadTimestamp: 'System Pre-loaded (Aug 2025)',
-    });
+    };
+    setParseResult(sampleResult);
+    await saveLocalDataset(INITIAL_SAMPLE_RECORDS, sampleResult);
     setFilters({
       dateMode: 'range',
       startDate: '2025-08-01',
@@ -389,6 +450,7 @@ export default function App() {
       selectedActivity: 'ALL',
       searchQuery: '',
     });
+    setCloudSyncMessage('Dataset dikembalikan ke contoh data timesheet awal.');
   };
 
   // Export current active view

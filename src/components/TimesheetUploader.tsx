@@ -60,6 +60,7 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [showVercelGuide, setShowVercelGuide] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Raw ledger pagination and search
@@ -386,9 +387,21 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
 
         {/* Cloud Notification Message */}
         {cloudSyncMessage && (
-          <div className="p-3 bg-[#0ea5e9]/10 border border-[#89ceff]/40 rounded-lg text-xs font-mono text-[#89ceff] flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-[#4edea3]" />
-            <span>{cloudSyncMessage}</span>
+          <div className={`p-3 rounded-lg text-xs font-mono flex items-start sm:items-center gap-2.5 transition-all ${
+            cloudSyncMessage.includes('Gagal') || cloudSyncMessage.includes('Peringatan') || cloudSyncMessage.includes('ditolak') || cloudSyncMessage.includes('tidak ditemukan')
+              ? 'bg-[#ffb4ab]/15 border border-[#ffb4ab]/50 text-[#ffb4ab]'
+              : cloudSyncMessage.includes('Catatan Cloud') || cloudSyncMessage.includes('Offline')
+                ? 'bg-[#ffb95f]/15 border border-[#ffb95f]/40 text-[#ffb95f]'
+                : 'bg-[#0ea5e9]/10 border border-[#89ceff]/40 text-[#89ceff]'
+          }`}>
+            {cloudSyncMessage.includes('Gagal') || cloudSyncMessage.includes('Peringatan') || cloudSyncMessage.includes('ditolak') || cloudSyncMessage.includes('tidak ditemukan') ? (
+              <AlertCircle className="w-4 h-4 shrink-0 text-[#ffb4ab] mt-0.5 sm:mt-0" />
+            ) : cloudSyncMessage.includes('Catatan Cloud') || cloudSyncMessage.includes('Offline') ? (
+              <Info className="w-4 h-4 shrink-0 text-[#ffb95f] mt-0.5 sm:mt-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#4edea3] mt-0.5 sm:mt-0" />
+            )}
+            <span className="flex-1 leading-relaxed">{cloudSyncMessage}</span>
           </div>
         )}
 
@@ -424,19 +437,20 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
         {/* Database Config & Metrics Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
           <div className="bg-[#0f131c] p-3 rounded-lg border border-[#31353e]/60">
-            <span className="text-[#88929b] text-[10px] uppercase">Firebase Project ID</span>
-            <div className="font-bold text-[#89ceff] truncate mt-1">
-              {FIREBASE_PROJECT_ID}
+            <span className="text-[#88929b] text-[10px] uppercase">Penyimpanan Browser</span>
+            <div className="font-bold text-[#4edea3] flex items-center gap-1.5 mt-1">
+              <span className="w-2 h-2 rounded-full bg-[#4edea3]"></span>
+              IndexedDB Aktif
             </div>
-            <span className="text-[10px] text-[#4edea3]">Google Cloud Connected</span>
+            <span className="text-[10px] text-[#88929b]">Persisten saat refresh web</span>
           </div>
 
           <div className="bg-[#0f131c] p-3 rounded-lg border border-[#31353e]/60">
-            <span className="text-[#88929b] text-[10px] uppercase">Database Identifier</span>
-            <div className="font-bold text-[#dfe2ee] truncate mt-1" title={FIRESTORE_DB_ID}>
-              {FIRESTORE_DB_ID}
+            <span className="text-[#88929b] text-[10px] uppercase">Firebase Project ID</span>
+            <div className="font-bold text-[#89ceff] truncate mt-1" title={FIREBASE_PROJECT_ID}>
+              {FIREBASE_PROJECT_ID}
             </div>
-            <span className="text-[10px] text-[#88929b]">Firestore Document DB</span>
+            <span className="text-[10px] text-[#4edea3]">Cloud Firestore DB</span>
           </div>
 
           <div className="bg-[#0f131c] p-3 rounded-lg border border-[#31353e]/60">
@@ -454,6 +468,66 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
             </div>
             <span className="text-[10px] text-[#88929b]">Collection: timesheet_batches</span>
           </div>
+        </div>
+
+        {/* Expandable Vercel & Firebase Deployment Guide */}
+        <div className="mt-1">
+          <button
+            type="button"
+            onClick={() => setShowVercelGuide(!showVercelGuide)}
+            className="text-xs font-mono text-[#89ceff] hover:text-[#bde4ff] flex items-center gap-1.5 cursor-pointer"
+          >
+            <Info className="w-3.5 h-3.5" />
+            <span>{showVercelGuide ? 'Sembunyikan Panduan Pengaturan Vercel & Firebase' : 'Lihat Panduan Pengaturan Firebase saat Dideploy ke Vercel'}</span>
+          </button>
+
+          {showVercelGuide && (
+            <div className="mt-3 p-4 bg-[#0f131c] border border-[#31353e] rounded-lg text-xs font-mono flex flex-col gap-3 text-[#dfe2ee]">
+              <div className="font-bold text-[#4edea3] text-sm flex items-center gap-2">
+                <Database className="w-4 h-4 text-[#4edea3]" />
+                Solusi Persistensi Data di Vercel & Firebase
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="font-bold text-[#ffb95f]">1. Dual-Layer Persistence (Otomatis Aktif)</span>
+                <p className="text-[#88929b] leading-relaxed">
+                  Aplikasi kini dilengkapi sistem penyimpanan ganda: setiap file Excel yang diunggah otomatis disimpan ke <strong className="text-[#dfe2ee]">IndexedDB Browser</strong> secara instan, serta disinkronkan ke <strong className="text-[#dfe2ee]">Firebase Firestore</strong>. Dengan ini, me-refresh halaman di Vercel <span className="text-[#4edea3] font-bold">tidak akan pernah menghilangkan data</span>.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="font-bold text-[#89ceff]">2. Security Rules di Firebase Console</span>
+                <p className="text-[#88929b] leading-relaxed">
+                  Jika Anda menghubungkan project Firebase pribadi dan muncul pesan <code className="text-[#ffb4ab]">permission-denied</code>, buka <strong className="text-[#dfe2ee]">Firebase Console &gt; Firestore Database &gt; Rules</strong>, lalu pastikan aturan mengizinkan read & write:
+                </p>
+                <pre className="bg-[#181c24] p-2.5 rounded border border-[#31353e] text-[11px] text-[#4edea3] overflow-x-auto">
+{`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`}
+                </pre>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="font-bold text-[#89ceff]">3. Environment Variables di Vercel (Opsional)</span>
+                <p className="text-[#88929b] leading-relaxed">
+                  Jika Anda ingin menggunakan Firebase Project milik Anda sendiri di Vercel, tambahkan variabel ini di <strong className="text-[#dfe2ee]">Vercel Dashboard &gt; Project Settings &gt; Environment Variables</strong>:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] text-[#88929b]">
+                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_PROJECT_ID</code></div>
+                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_API_KEY</code></div>
+                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_AUTH_DOMAIN</code></div>
+                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_STORAGE_BUCKET</code></div>
+                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_MESSAGING_SENDER_ID</code></div>
+                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_APP_ID</code></div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Upload History Table (Batches) */}
