@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "timesheet_records": {
+      "description": "Timesheet operational equipment records parsed from uploaded Excel sheets",
+      "fields": {
+        "id": { "type": "string", "description": "Unique record ID" },
+        "date": { "type": "string", "description": "Date of timesheet YYYY-MM-DD" },
+        "shift": { "type": "string", "description": "Shift D (Day) or N (Night)" },
+        "unit": { "type": "string", "description": "Equipment unit code e.g. FD23001" },
+        "operator": { "type": "string", "description": "Operator name" },
+        "activityCode": { "type": "string", "description": "Activity code" },
+        "startTime": { "type": "string", "description": "Start time HH:mm" },
+        "stopTime": { "type": "string", "description": "Stop time HH:mm" },
+        "startHm": { "type": "number", "description": "Starting hour meter" },
+        "stopHm": { "type": "number", "description": "Stopping hour meter" },
+        "totalHm": { "type": "number", "description": "Total hour meter duration" },
+        "activity": { "type": "string", "description": "Activity description" },
+        "remark": { "type": "string", "description": "Operator/supervisor remark" },
+        "category": { "type": "string", "description": "Equipment category (12 types)" },
+        "model": { "type": "string", "description": "Equipment model" },
+        "uploadBatchId": { "type": "string", "description": "Batch ID of uploaded Excel file" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation" }
+      },
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "timesheet_batches": {
+      "description": "Metadata logs of uploaded Excel files",
+      "fields": {
+        "id": { "type": "string", "description": "Unique batch ID" },
+        "fileName": { "type": "string", "description": "Name of uploaded file" },
+        "recordCount": { "type": "number", "description": "Number of records uploaded" },
+        "uploadedAt": { "type": "string", "description": "ISO timestamp of upload" },
+        "minDate": { "type": "string", "description": "Earliest record date" },
+        "maxDate": { "type": "string", "description": "Latest record date" }
+      },
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    }
+  }
+}

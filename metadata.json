@@ -1,0 +1,6 @@
+{
+  "name": "Equipment Activity Dashboard",
+  "description": "Operational timesheet analytics platform featuring Pareto activity analysis, unit Hour Meter (HM) breakdowns, and daily HM matrix pivot tables for fleet equipment.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
