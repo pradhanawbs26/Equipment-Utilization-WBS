@@ -56,6 +56,26 @@ export interface TimesheetRecord {
   category: EquipmentCategory; // Truck, HE, Support
   model?: string;
   notes?: string;
+
+  // Supabase compatibility fields (active_datasets & timesheet_records schema)
+  datasetId?: string;
+  cnUnit?: string;
+  userLocation?: string;
+  activityType?: string;
+  operatingHours?: number;
+  fuelVolume?: number;
+  loggedDate?: string;
+}
+
+export interface ActiveDatasetMetadata {
+  fileName: string;
+  batchesCount?: number;
+  startDate?: string;
+  endDate?: string;
+  totalHours?: number;
+  totalVolume?: number;
+  recordCount?: number;
+  uploadedBy?: string;
 }
 
 export interface FilterState {

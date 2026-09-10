@@ -10,8 +10,9 @@ interface HeaderProps {
   onExportCurrentView: (format: 'csv' | 'xlsx') => void;
   totalRecordsCount: number;
   filteredRecordsCount: number;
-  isFirebaseLoading?: boolean;
-  isFirebaseSaving?: boolean;
+  isCloudLoading?: boolean;
+  isCloudSaving?: boolean;
+  isSupabaseConfigured?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,8 +23,9 @@ export const Header: React.FC<HeaderProps> = ({
   onExportCurrentView,
   totalRecordsCount,
   filteredRecordsCount,
-  isFirebaseLoading,
-  isFirebaseSaving,
+  isCloudLoading,
+  isCloudSaving,
+  isSupabaseConfigured = false,
 }) => {
   const dateRangeDisplay = filters.dateMode === 'single'
     ? filters.selectedSingleDate || 'Single Date'
@@ -34,42 +36,36 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="h-16 w-full px-4 lg:px-6 flex items-center justify-between gap-3">
         {/* Left Branding */}
         <div className="flex items-center gap-3 min-w-max">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded bg-gradient-to-br from-[#0ea5e9] to-[#0284c7] flex items-center justify-center shadow-sm text-white font-bold font-mono text-sm tracking-tighter">
-              EA
-            </div>
+          <div className="flex items-center gap-3">
+            <img
+              src="https://res.cloudinary.com/dgjnlxf69/image/upload/v1788933840/Logo_UA_Equipment_j2nlnj.png"
+              alt="UA Equipment Logo"
+              className="h-10 w-auto max-h-10 object-contain shrink-0"
+              referrerPolicy="no-referrer"
+            />
             <div className="flex flex-col">
               <span className="font-semibold text-sm lg:text-base leading-none text-[#dfe2ee] tracking-tight">
                 Equipment Activity Dashboard
               </span>
               <span className="font-mono text-[10px] uppercase text-[#89ceff] tracking-wider mt-1 font-semibold">
-                PIT-04 SEAM DISPATCH • TIMESHEET ENGINE
+                UA EQUIPMENT • TIMESHEET ENGINE
               </span>
             </div>
           </div>
 
-          <div className="hidden sm:block h-6 w-px bg-[#31353e]"></div>
-
-          <div className="hidden sm:flex items-center gap-1.5 bg-[#1c2028] px-2.5 py-1 rounded border border-[#3e4850]/50">
-            <div className="w-2 h-2 rounded-full bg-[#4edea3] animate-pulse"></div>
-            <span className="font-mono font-bold text-[11px] text-[#4edea3]">
-              99.8% TELEMETRY SYNC
-            </span>
-          </div>
-
-          {/* Firebase Database Live Badge */}
+          {/* Database Live Status Indicator */}
           <div
             className="hidden md:flex items-center gap-1.5 bg-[#1c2028] px-2.5 py-1 rounded border border-[#89ceff]/30 cursor-pointer hover:bg-[#262a33] transition-colors"
             onClick={() => onTabChange('timesheet-ingestion')}
-            title="Firebase Firestore Connected (Project: safetyfirst-wbs)"
+            title={isSupabaseConfigured ? 'Supabase PostgreSQL Connected' : 'Browser IndexedDB Active (Click to configure Supabase)'}
           >
-            <Database className={`w-3 h-3 ${isFirebaseSaving || isFirebaseLoading ? 'text-[#ffb95f] animate-spin' : 'text-[#89ceff]'}`} />
+            <Database className={`w-3 h-3 ${isCloudSaving || isCloudLoading ? 'text-[#ffb95f] animate-spin' : 'text-[#89ceff]'}`} />
             <span className="font-mono text-[11px] text-[#dfe2ee]">
-              Firestore: <span className="text-[#89ceff] font-bold">safetyfirst-wbs</span>
+              DB: <span className="text-[#89ceff] font-bold">{isSupabaseConfigured ? 'Supabase' : 'IndexedDB'}</span>
             </span>
-            {isFirebaseSaving ? (
+            {isCloudSaving ? (
               <span className="text-[10px] text-[#ffb95f] font-mono animate-pulse">Saving...</span>
-            ) : isFirebaseLoading ? (
+            ) : isCloudLoading ? (
               <span className="text-[10px] text-[#89ceff] font-mono animate-pulse">Syncing...</span>
             ) : (
               <div className="w-1.5 h-1.5 rounded-full bg-[#4edea3]"></div>

@@ -25,13 +25,16 @@ import {
   exportRawTimesheetLedger
 } from './utils/exportUtils';
 import {
-  saveRecordsToFirestore,
-  fetchRecordsFromFirestore,
-  fetchBatchesFromFirestore,
-  clearAllFirestoreData,
+  supabase,
+  isSupabaseConfigured,
+  saveDatasetToSupabase,
+  saveRecordsToSupabase,
+  fetchBatchesFromSupabase,
+  clearAllSupabaseData,
+  mapSupabaseRowToTimesheetRecord,
   BatchMetadata,
-  FIREBASE_PROJECT_ID
-} from './lib/firebase';
+  SUPABASE_URL
+} from './lib/supabase';
 import {
   saveLocalDataset,
   loadLocalDataset,
@@ -67,10 +70,10 @@ export default function App() {
   // Current active navigation tab
   const [currentTab, setCurrentTab] = useState<string>('pareto-activity');
 
-  // Firebase integration states
-  const [isFirebaseLoading, setIsFirebaseLoading] = useState<boolean>(true);
-  const [isFirebaseSaving, setIsFirebaseSaving] = useState<boolean>(false);
-  const [firebaseRecordCount, setFirebaseRecordCount] = useState<number>(0);
+  // Cloud (Supabase) integration states
+  const [isCloudLoading, setIsCloudLoading] = useState<boolean>(false);
+  const [isCloudSaving, setIsCloudSaving] = useState<boolean>(false);
+  const [cloudRecordCount, setCloudRecordCount] = useState<number>(0);
   const [uploadBatches, setUploadBatches] = useState<BatchMetadata[]>([]);
   const [cloudSyncMessage, setCloudSyncMessage] = useState<string | null>(null);
 
@@ -90,7 +93,7 @@ export default function App() {
     searchQuery: '',
   });
 
-  // Fetch initial records: prioritize instant local IndexedDB dataset, then query Firebase Firestore
+  // Fetch initial records: prioritize instant local IndexedDB dataset, then query Supabase
   useEffect(() => {
     let isMounted = true;
 
@@ -118,70 +121,107 @@ export default function App() {
         console.warn('Local storage retrieval notice:', localErr);
       }
 
-      // 2. Fetch from Firebase Firestore in parallel
-      setIsFirebaseLoading(true);
-      try {
-        const [cloudRecords, batches] = await Promise.all([
-          fetchRecordsFromFirestore().catch(e => {
-            console.warn('Firestore fetchRecords warning:', e);
-            return [];
-          }),
-          fetchBatchesFromFirestore().catch(() => [])
-        ]);
+      // 2. Fetch from Supabase in parallel if configured using Supabase Client SDK
+      if (isSupabaseConfigured) {
+        setIsCloudLoading(true);
+        try {
+          // Ambil dataset aktif dari tabel active_datasets dan timesheet_records
+          let cloudRecords: TimesheetRecord[] = [];
+          let activeFileName = 'Supabase Cloud Database';
+          let activeUploadedAt = 'Synced from Supabase';
 
-        if (!isMounted) return;
+          // Query tabel active_datasets
+          const { data: activeDs } = await supabase
+            .from('active_datasets')
+            .select('*')
+            .eq('dataset_code', 'current')
+            .maybeSingle();
 
-        setUploadBatches(batches);
-        setFirebaseRecordCount(cloudRecords.length);
+          if (activeDs && activeDs.id) {
+            activeFileName = activeDs.file_name ? `${activeDs.file_name} (Supabase)` : activeFileName;
+            activeUploadedAt = activeDs.created_at ? new Date(activeDs.created_at).toLocaleString('id-ID') : activeUploadedAt;
 
-        // If cloud database has records, synchronize with workspace and local storage
-        if (cloudRecords.length > 0) {
-          setRawRecords(cloudRecords);
+            // Query tabel timesheet_records berdasarkan dataset_id
+            const { data: recData } = await supabase
+              .from('timesheet_records')
+              .select('*')
+              .eq('dataset_id', activeDs.id);
 
-          const dates = cloudRecords.map(r => r.date).filter(Boolean).sort();
-          const minD = dates[0] || '2025-08-01';
-          const maxD = dates[dates.length - 1] || '2025-08-14';
+            if (recData && recData.length > 0) {
+              cloudRecords = recData.map(mapSupabaseRowToTimesheetRecord);
+            }
+          }
 
-          const latestBatch = batches[0];
-          const cloudParseResult: ParseResult = {
-            records: cloudRecords,
-            sheetNameUsed: 'Timeshet Mobile',
-            availableSheets: ['Timeshet Mobile (Cloud)'],
-            totalRowsRaw: cloudRecords.length,
-            validRows: cloudRecords.length,
-            cleanedNullHmCount: 0,
-            dateRange: { min: minD, max: maxD },
-            categoriesDetected: Array.from(new Set(cloudRecords.map(r => r.category))),
-            unitsDetected: Array.from(new Set(cloudRecords.map(r => r.unit))).sort(),
-            activitiesDetected: Array.from(new Set(cloudRecords.map(r => r.activity))).sort(),
-            fileName: latestBatch?.fileName ? `${latestBatch.fileName} (Firestore)` : 'Firebase Cloud Database',
-            uploadTimestamp: latestBatch?.uploadedAt
-              ? new Date(latestBatch.uploadedAt).toLocaleString('id-ID')
-              : 'Synced from Firestore',
-          };
+          // Fallback query tabel timesheet_records langsung
+          if (cloudRecords.length === 0) {
+            const { data: allRecs } = await supabase
+              .from('timesheet_records')
+              .select('*')
+              .limit(10000);
 
-          setParseResult(cloudParseResult);
-          // Keep local IndexedDB updated with cloud state
-          await saveLocalDataset(cloudRecords, cloudParseResult);
+            if (allRecs && allRecs.length > 0) {
+              cloudRecords = allRecs.map(mapSupabaseRowToTimesheetRecord);
+            }
+          }
 
-          setFilters(prev => ({
-            ...prev,
-            startDate: minD,
-            endDate: maxD,
-            selectedSingleDate: minD,
-          }));
+          const batches = await fetchBatchesFromSupabase().catch(() => []);
 
-          setCloudSyncMessage(`Terkoneksi ke Firebase: Berhasil menyinkronkan ${cloudRecords.length} record dari database cloud (${FIREBASE_PROJECT_ID}).`);
-        } else {
-          setCloudSyncMessage(`Firebase Firestore online (${FIREBASE_PROJECT_ID}). Database siap menerima unggahan Excel.`);
+          if (!isMounted) return;
+
+          setUploadBatches(batches);
+          setCloudRecordCount(cloudRecords.length);
+
+          // If cloud database has records, synchronize with workspace and local storage
+          if (cloudRecords.length > 0) {
+            setRawRecords(cloudRecords);
+
+            const dates = cloudRecords.map(r => r.date).filter(Boolean).sort();
+            const minD = dates[0] || '2025-08-01';
+            const maxD = dates[dates.length - 1] || '2025-08-14';
+
+            const latestBatch = batches[0];
+            const cloudParseResult: ParseResult = {
+              records: cloudRecords,
+              sheetNameUsed: 'Timeshet Mobile',
+              availableSheets: ['Timeshet Mobile (Supabase)'],
+              totalRowsRaw: cloudRecords.length,
+              validRows: cloudRecords.length,
+              cleanedNullHmCount: 0,
+              dateRange: { min: minD, max: maxD },
+              categoriesDetected: Array.from(new Set(cloudRecords.map(r => r.category))),
+              unitsDetected: Array.from(new Set(cloudRecords.map(r => r.unit))).sort(),
+              activitiesDetected: Array.from(new Set(cloudRecords.map(r => r.activity))).sort(),
+              fileName: latestBatch?.fileName ? `${latestBatch.fileName} (Supabase)` : activeFileName,
+              uploadTimestamp: latestBatch?.uploadedAt
+                ? new Date(latestBatch.uploadedAt).toLocaleString('id-ID')
+                : activeUploadedAt,
+            };
+
+            setParseResult(cloudParseResult);
+            // Keep local IndexedDB updated with cloud state
+            await saveLocalDataset(cloudRecords, cloudParseResult);
+
+            setFilters(prev => ({
+              ...prev,
+              startDate: minD,
+              endDate: maxD,
+              selectedSingleDate: minD,
+            }));
+
+            setCloudSyncMessage(`Terkoneksi ke Supabase: Berhasil menyinkronkan ${cloudRecords.length} record dari PostgreSQL (active_datasets & timesheet_records).`);
+          } else {
+            setCloudSyncMessage('Supabase online. Database siap menerima unggahan Excel.');
+          }
+        } catch (err: any) {
+          console.warn('Supabase initial fetch notice:', err);
+          if (isMounted) {
+            setCloudSyncMessage(`Penyimpanan browser (IndexedDB) aktif. Info Supabase: ${err?.message || 'Offline'}`);
+          }
+        } finally {
+          if (isMounted) setIsCloudLoading(false);
         }
-      } catch (err: any) {
-        console.warn('Firestore initial fetch notice:', err);
-        if (isMounted) {
-          setCloudSyncMessage(`Penyimpanan aktif: Browser IndexedDB aman. Info Cloud: ${err?.message || 'Offline'}`);
-        }
-      } finally {
-        if (isMounted) setIsFirebaseLoading(false);
+      } else {
+        setCloudSyncMessage('Penyimpanan lokal browser (IndexedDB) aktif. Data persisten saat web direfresh.');
       }
     }
 
@@ -267,7 +307,7 @@ export default function App() {
     setFilters(prev => ({ ...prev, ...updated }));
   };
 
-  // File loaded event from uploader (with automatic IndexedDB & Firebase Firestore persistence)
+  // File loaded event from uploader (with automatic IndexedDB & Supabase PostgreSQL persistence)
   const handleDataLoaded = async (result: ParseResult) => {
     setRawRecords(result.records);
     setParseResult(result);
@@ -289,42 +329,99 @@ export default function App() {
       console.warn('Local persistence warning:', saveLocalErr);
     }
 
-    // 2. Auto-save to Firebase Firestore cloud database
-    setIsFirebaseSaving(true);
-    try {
-      const { batchId, count } = await saveRecordsToFirestore(result.records, result.fileName);
-      setFirebaseRecordCount(count);
+    // 2. Auto-save to Supabase cloud database if configured (active_datasets & timesheet_records)
+    if (isSupabaseConfigured) {
+      setIsCloudSaving(true);
+      try {
+        const metadata = {
+          fileName: result.fileName || 'Timesheet_Data.xlsx',
+          batchesCount: 1,
+          startDate: result.dateRange.min,
+          endDate: result.dateRange.max,
+          totalHours: result.records.reduce((sum, r) => sum + (r.totalHm || r.operatingHours || 0), 0),
+          totalVolume: 0,
+          recordCount: result.records.length,
+          uploadedBy: 'Fleet Admin'
+        };
+        await saveDatasetToSupabase(metadata, result.records);
 
-      // Refresh upload batches
-      const batches = await fetchBatchesFromFirestore();
-      setUploadBatches(batches);
+        const { batchId, count } = await saveRecordsToSupabase(result.records, result.fileName);
+        setCloudRecordCount(count);
 
+        // Refresh upload batches
+        const batches = await fetchBatchesFromSupabase();
+        setUploadBatches(batches);
+
+        setCloudSyncMessage(
+          `✓ Data tersimpan di Supabase PostgreSQL (active_datasets & timesheet_records)! (${count} baris data).`
+        );
+      } catch (err: any) {
+        console.error('Failed to save to Supabase:', err);
+        const errDetail = err?.message || String(err);
+        setCloudSyncMessage(
+          `✓ Data tersimpan aman di browser (IndexedDB). Catatan Supabase: ${errDetail}`
+        );
+      } finally {
+        setIsCloudSaving(false);
+      }
+    } else {
       setCloudSyncMessage(
-        `✓ Tersimpan di Database Firebase Firestore (${FIREBASE_PROJECT_ID}) & Browser Storage! Batch ID: ${batchId.slice(0, 8)}... (${count} baris data).`
+        `✓ ${result.records.length} baris data tersimpan aman di browser (IndexedDB)! Data tidak akan hilang saat direfresh.`
       );
-    } catch (err: any) {
-      console.error('Failed to save to Firebase Firestore:', err);
-      const errDetail = err?.message || String(err);
-      setCloudSyncMessage(
-        `✓ Data tersimpan aman di browser (IndexedDB). Catatan Cloud Firebase: ${errDetail}`
-      );
-    } finally {
-      setIsFirebaseSaving(false);
     }
   };
 
-  // Manual sync from Firebase Firestore
-  const handleSyncFromFirebase = async () => {
-    setIsFirebaseLoading(true);
+  // Manual sync from Supabase using supabase client querying active_datasets & timesheet_records
+  const handleSyncFromCloud = async () => {
+    if (!isSupabaseConfigured) {
+      setCloudSyncMessage('Supabase belum dikonfigurasi. Masukkan VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY di environment variables.');
+      return;
+    }
+    setIsCloudLoading(true);
     setCloudSyncMessage(null);
     try {
-      const [cloudRecords, batches] = await Promise.all([
-        fetchRecordsFromFirestore(),
-        fetchBatchesFromFirestore()
-      ]);
+      let cloudRecords: TimesheetRecord[] = [];
+      let activeFileName = 'Supabase Cloud Database';
+      let activeUploadedAt = 'Synced from Supabase';
+
+      // Query tabel active_datasets
+      const { data: activeDs } = await supabase
+        .from('active_datasets')
+        .select('*')
+        .eq('dataset_code', 'current')
+        .maybeSingle();
+
+      if (activeDs && activeDs.id) {
+        activeFileName = activeDs.file_name ? `${activeDs.file_name} (Supabase)` : activeFileName;
+        activeUploadedAt = activeDs.created_at ? new Date(activeDs.created_at).toLocaleString('id-ID') : activeUploadedAt;
+
+        // Query tabel timesheet_records berdasarkan dataset_id
+        const { data: recData } = await supabase
+          .from('timesheet_records')
+          .select('*')
+          .eq('dataset_id', activeDs.id);
+
+        if (recData && recData.length > 0) {
+          cloudRecords = recData.map(mapSupabaseRowToTimesheetRecord);
+        }
+      }
+
+      // Fallback: query tabel timesheet_records langsung
+      if (cloudRecords.length === 0) {
+        const { data: allRecs } = await supabase
+          .from('timesheet_records')
+          .select('*')
+          .limit(10000);
+
+        if (allRecs && allRecs.length > 0) {
+          cloudRecords = allRecs.map(mapSupabaseRowToTimesheetRecord);
+        }
+      }
+
+      const batches = await fetchBatchesFromSupabase().catch(() => []);
 
       setUploadBatches(batches);
-      setFirebaseRecordCount(cloudRecords.length);
+      setCloudRecordCount(cloudRecords.length);
 
       if (cloudRecords.length > 0) {
         setRawRecords(cloudRecords);
@@ -337,7 +434,7 @@ export default function App() {
         const syncResult: ParseResult = {
           records: cloudRecords,
           sheetNameUsed: 'Timeshet Mobile',
-          availableSheets: ['Timeshet Mobile (Cloud)'],
+          availableSheets: ['Timeshet Mobile (Supabase)'],
           totalRowsRaw: cloudRecords.length,
           validRows: cloudRecords.length,
           cleanedNullHmCount: 0,
@@ -345,10 +442,10 @@ export default function App() {
           categoriesDetected: Array.from(new Set(cloudRecords.map(r => r.category))),
           unitsDetected: Array.from(new Set(cloudRecords.map(r => r.unit))).sort(),
           activitiesDetected: Array.from(new Set(cloudRecords.map(r => r.activity))).sort(),
-          fileName: latestBatch?.fileName ? `${latestBatch.fileName} (Cloud)` : 'Firebase Cloud Database',
+          fileName: latestBatch?.fileName ? `${latestBatch.fileName} (Cloud)` : activeFileName,
           uploadTimestamp: latestBatch?.uploadedAt
             ? new Date(latestBatch.uploadedAt).toLocaleString('id-ID')
-            : 'Synced from Firestore',
+            : activeUploadedAt,
         };
 
         setParseResult(syncResult);
@@ -361,22 +458,22 @@ export default function App() {
           selectedSingleDate: minD,
         }));
 
-        setCloudSyncMessage(`Berhasil menyinkronkan ${cloudRecords.length} record dari database Firebase Firestore!`);
+        setCloudSyncMessage(`Berhasil menyinkronkan ${cloudRecords.length} record dari database Supabase (tabel active_datasets & timesheet_records)!`);
       } else {
-        setCloudSyncMessage('Database Firebase Firestore saat ini masih kosong. Silakan upload file Excel.');
+        setCloudSyncMessage('Database Supabase saat ini masih kosong. Silakan upload file Excel.');
       }
     } catch (err: any) {
-      console.error('Error syncing from Firebase:', err);
-      setCloudSyncMessage(`Gagal menyinkronkan dari Firebase: ${err?.message || 'Error'}`);
+      console.error('Error syncing from Supabase:', err);
+      setCloudSyncMessage(`Gagal menyinkronkan dari Supabase: ${err?.message || 'Error'}`);
     } finally {
-      setIsFirebaseLoading(false);
+      setIsCloudLoading(false);
     }
   };
 
-  // Manual save current active records to Firestore & Local IndexedDB
-  const handleSaveCurrentToFirebase = async () => {
+  // Manual save current active records to Supabase & Local IndexedDB
+  const handleSaveCurrentToCloud = async () => {
     if (rawRecords.length === 0) return;
-    setIsFirebaseSaving(true);
+    setIsCloudSaving(true);
     setCloudSyncMessage(null);
     try {
       const fileName = parseResult?.fileName || 'Fleet_Timesheet_Manual_Save.xlsx';
@@ -386,38 +483,54 @@ export default function App() {
         await saveLocalDataset(rawRecords, parseResult);
       }
 
-      // Save to Firebase Firestore
-      const { batchId, count } = await saveRecordsToFirestore(rawRecords, fileName);
-      setFirebaseRecordCount(count);
+      // Save to Supabase if configured (active_datasets & timesheet_records)
+      if (isSupabaseConfigured) {
+        const metadata = {
+          fileName,
+          batchesCount: 1,
+          startDate: parseResult?.dateRange?.min || rawRecords[0]?.date || '',
+          endDate: parseResult?.dateRange?.max || rawRecords[rawRecords.length - 1]?.date || '',
+          totalHours: rawRecords.reduce((sum, r) => sum + (r.totalHm || r.operatingHours || 0), 0),
+          totalVolume: 0,
+          recordCount: rawRecords.length,
+          uploadedBy: 'Fleet Admin'
+        };
+        await saveDatasetToSupabase(metadata, rawRecords);
 
-      const batches = await fetchBatchesFromFirestore();
-      setUploadBatches(batches);
+        const { batchId, count } = await saveRecordsToSupabase(rawRecords, fileName);
+        setCloudRecordCount(count);
 
-      setCloudSyncMessage(`Berhasil menyimpan ${count} record ke Firebase Firestore (${FIREBASE_PROJECT_ID}) & Browser Storage!`);
+        const batches = await fetchBatchesFromSupabase();
+        setUploadBatches(batches);
+
+        setCloudSyncMessage(`Berhasil menyimpan ${count} record ke Supabase PostgreSQL (active_datasets & timesheet_records) & Browser Storage!`);
+      } else {
+        setCloudSyncMessage(`Berhasil menyimpan ${rawRecords.length} record ke penyimpanan browser (IndexedDB).`);
+      }
     } catch (err: any) {
-      console.error('Failed to save to Firestore:', err);
+      console.error('Failed to save to Supabase:', err);
       setCloudSyncMessage(`Data tersimpan di browser. Info Cloud: ${err?.message || 'Error'}`);
     } finally {
-      setIsFirebaseSaving(false);
+      setIsCloudSaving(false);
     }
   };
 
-  // Clear all data in Firestore and local IndexedDB
-  const handleClearFirebaseData = async () => {
-    setIsFirebaseLoading(true);
+  // Clear all data in Supabase and local IndexedDB
+  const handleClearCloudData = async () => {
+    setIsCloudLoading(true);
     try {
       await Promise.all([
-        clearAllFirestoreData().catch(e => console.warn('Clear Firestore notice:', e)),
+        clearAllSupabaseData().catch(e => console.warn('Clear Supabase notice:', e)),
         clearLocalDataset().catch(e => console.warn('Clear Local notice:', e))
       ]);
       setUploadBatches([]);
-      setFirebaseRecordCount(0);
-      setCloudSyncMessage('Semua data di Firebase Firestore dan penyimpanan browser telah berhasil dibersihkan.');
+      setCloudRecordCount(0);
+      setCloudSyncMessage('Semua data di Supabase dan penyimpanan browser telah berhasil dibersihkan.');
     } catch (err: any) {
-      console.error('Failed to clear Firestore:', err);
+      console.error('Failed to clear Supabase:', err);
       setCloudSyncMessage(`Gagal membersihkan database: ${err?.message || 'Error'}`);
     } finally {
-      setIsFirebaseLoading(false);
+      setIsCloudLoading(false);
     }
   };
 
@@ -495,8 +608,8 @@ export default function App() {
           onExportCurrentView={handleExportCurrentView}
           totalRecordsCount={rawRecords.length}
           filteredRecordsCount={filteredRecords.length}
-          isFirebaseLoading={isFirebaseLoading}
-          isFirebaseSaving={isFirebaseSaving}
+          isFirebaseLoading={isCloudLoading}
+          isFirebaseSaving={isCloudSaving}
         />
 
         {/* Primary Page Canvas */}
@@ -558,14 +671,14 @@ export default function App() {
               currentParseResult={parseResult}
               records={filteredRecords}
               onResetToSample={handleResetToSample}
-              isFirebaseSaving={isFirebaseSaving}
-              isFirebaseLoading={isFirebaseLoading}
+              isCloudSaving={isCloudSaving}
+              isCloudLoading={isCloudLoading}
               cloudSyncMessage={cloudSyncMessage}
               uploadBatches={uploadBatches}
-              firebaseRecordCount={firebaseRecordCount}
-              onSyncFromFirebase={handleSyncFromFirebase}
-              onSaveCurrentToFirebase={handleSaveCurrentToFirebase}
-              onClearFirebaseData={handleClearFirebaseData}
+              cloudRecordCount={cloudRecordCount}
+              onSyncFromCloud={handleSyncFromCloud}
+              onSaveCurrentToCloud={handleSaveCurrentToCloud}
+              onClearCloudData={handleClearCloudData}
             />
           )}
         </main>

@@ -24,21 +24,26 @@ import { TimesheetRecord, ParseResult } from '../types';
 import { parseTimesheetWorkbook, generateSampleExcelWorkbook } from '../utils/excelParser';
 import { exportRawTimesheetLedger } from '../utils/exportUtils';
 import { INITIAL_SAMPLE_RECORDS } from '../data/sampleTimesheetData';
-import { BatchMetadata, FIREBASE_PROJECT_ID, FIRESTORE_DB_ID } from '../lib/firebase';
+import {
+  BatchMetadata,
+  SUPABASE_URL,
+  isSupabaseConfigured,
+  SUPABASE_SQL_SCHEMA
+} from '../lib/supabase';
 
 interface TimesheetUploaderProps {
   onDataLoaded: (result: ParseResult) => Promise<void> | void;
   currentParseResult: ParseResult | null;
   records: TimesheetRecord[];
   onResetToSample: () => void;
-  isFirebaseSaving?: boolean;
-  isFirebaseLoading?: boolean;
+  isCloudSaving?: boolean;
+  isCloudLoading?: boolean;
   cloudSyncMessage?: string | null;
   uploadBatches?: BatchMetadata[];
-  firebaseRecordCount?: number;
-  onSyncFromFirebase?: () => Promise<void>;
-  onSaveCurrentToFirebase?: () => Promise<void>;
-  onClearFirebaseData?: () => Promise<void>;
+  cloudRecordCount?: number;
+  onSyncFromCloud?: () => Promise<void>;
+  onSaveCurrentToCloud?: () => Promise<void>;
+  onClearCloudData?: () => Promise<void>;
 }
 
 export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
@@ -46,14 +51,14 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
   currentParseResult,
   records,
   onResetToSample,
-  isFirebaseSaving = false,
-  isFirebaseLoading = false,
+  isCloudSaving = false,
+  isCloudLoading = false,
   cloudSyncMessage,
   uploadBatches = [],
-  firebaseRecordCount = 0,
-  onSyncFromFirebase,
-  onSaveCurrentToFirebase,
-  onClearFirebaseData,
+  cloudRecordCount = 0,
+  onSyncFromCloud,
+  onSaveCurrentToCloud,
+  onClearCloudData,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -61,6 +66,7 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [showVercelGuide, setShowVercelGuide] = useState(false);
+  const [copiedSQL, setCopiedSQL] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Raw ledger pagination and search
@@ -85,11 +91,11 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
         throw new Error('No valid operational timesheet records could be extracted from sheet "Timeshet Mobile".');
       }
 
-      // Pass parsed data to parent and trigger auto-save to Firebase Firestore
+      // Pass parsed data to parent and trigger auto-save to Supabase & IndexedDB
       await onDataLoaded(parsed);
 
       setSuccessMessage(
-        `Sukses! Berhasil memproses ${parsed.records.length} record dari sheet "${parsed.sheetNameUsed}" dan menyimpannya ke Firebase Firestore (${FIREBASE_PROJECT_ID}).`
+        `Sukses! Berhasil memproses ${parsed.records.length} record dari sheet "${parsed.sheetNameUsed}". Data tersimpan aman di penyimpanan lokal browser & siap disinkronkan ke Supabase.`
       );
       setCurrentPage(1);
     } catch (err: any) {
@@ -321,7 +327,7 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
         </div>
       </section>
 
-      {/* 2.5 FIREBASE FIRESTORE BACKEND DATABASE STATUS & CONTROLS */}
+      {/* 2.5 SUPABASE POSTGRESQL DATABASE STATUS & CONTROLS */}
       <section className="bg-[#181c24] border border-[#31353e]/80 rounded-lg p-5 shadow-md flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#31353e]/60">
           <div className="flex items-center gap-2.5">
@@ -331,7 +337,7 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-[#dfe2ee]">
-                  Firebase Firestore Database Backend
+                  Supabase PostgreSQL Database
                 </h2>
                 <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#4edea3]/10 border border-[#4edea3]/30 text-[#4edea3] text-[10px] font-mono font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#4edea3] animate-pulse"></span>
@@ -339,45 +345,45 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
                 </span>
               </div>
               <p className="text-xs font-mono text-[#88929b] mt-0.5">
-                Semua data file Excel tersimpan secara otomatis dan persisten di database Google Cloud Firestore
+                Semua data file Excel tersimpan secara otomatis dan persisten di database Supabase (tabel active_datasets & timesheet_records)
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {onSyncFromFirebase && (
+            {onSyncFromCloud && (
               <button
                 type="button"
-                onClick={onSyncFromFirebase}
-                disabled={isFirebaseLoading || isFirebaseSaving}
+                onClick={onSyncFromCloud}
+                disabled={isCloudLoading || isCloudSaving}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1c2028] hover:bg-[#262a33] text-[#89ceff] text-xs font-mono font-semibold rounded border border-[#89ceff]/40 transition-colors disabled:opacity-50 cursor-pointer"
-                title="Tarik & sinkronkan data terbaru dari Firebase Firestore"
+                title="Tarik & sinkronkan data terbaru dari Supabase PostgreSQL"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isFirebaseLoading ? 'animate-spin text-[#ffb95f]' : ''}`} />
-                <span>{isFirebaseLoading ? 'Menyinkronkan...' : 'Sinkronkan dari Cloud'}</span>
+                <RefreshCw className={`w-3.5 h-3.5 ${isCloudLoading ? 'animate-spin text-[#ffb95f]' : ''}`} />
+                <span>{isCloudLoading ? 'Menyinkronkan...' : 'Sinkronkan dari Supabase'}</span>
               </button>
             )}
 
-            {onSaveCurrentToFirebase && (
+            {onSaveCurrentToCloud && (
               <button
                 type="button"
-                onClick={onSaveCurrentToFirebase}
-                disabled={isFirebaseLoading || isFirebaseSaving || records.length === 0}
+                onClick={onSaveCurrentToCloud}
+                disabled={isCloudLoading || isCloudSaving || records.length === 0}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0ea5e9] hover:bg-[#0284c7] text-[#00344d] text-xs font-mono font-bold rounded transition-colors disabled:opacity-50 cursor-pointer shadow-sm"
-                title="Simpan seluruh record saat ini ke Firestore database"
+                title="Simpan seluruh record saat ini ke database Supabase"
               >
-                <Cloud className={`w-3.5 h-3.5 ${isFirebaseSaving ? 'animate-spin' : ''}`} />
-                <span>{isFirebaseSaving ? 'Menyimpan...' : 'Simpan ke Firestore'}</span>
+                <Cloud className={`w-3.5 h-3.5 ${isCloudSaving ? 'animate-spin' : ''}`} />
+                <span>{isCloudSaving ? 'Menyimpan...' : 'Simpan ke Supabase'}</span>
               </button>
             )}
 
-            {onClearFirebaseData && (
+            {onClearCloudData && (
               <button
                 type="button"
                 onClick={() => setConfirmClearOpen(true)}
-                disabled={isFirebaseLoading || isFirebaseSaving}
+                disabled={isCloudLoading || isCloudSaving}
                 className="p-1.5 bg-[#1c2028] hover:bg-[#262a33] text-[#88929b] hover:text-[#ffb4ab] text-xs rounded border border-[#31353e] hover:border-[#ffb4ab]/40 transition-colors cursor-pointer"
-                title="Hapus data di cloud database"
+                title="Hapus data di database cloud"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -388,15 +394,15 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
         {/* Cloud Notification Message */}
         {cloudSyncMessage && (
           <div className={`p-3 rounded-lg text-xs font-mono flex items-start sm:items-center gap-2.5 transition-all ${
-            cloudSyncMessage.includes('Gagal') || cloudSyncMessage.includes('Peringatan') || cloudSyncMessage.includes('ditolak') || cloudSyncMessage.includes('tidak ditemukan')
+            cloudSyncMessage.includes('Gagal') || cloudSyncMessage.includes('Peringatan') || cloudSyncMessage.includes('ditolak') || cloudSyncMessage.includes('tidak valid')
               ? 'bg-[#ffb4ab]/15 border border-[#ffb4ab]/50 text-[#ffb4ab]'
-              : cloudSyncMessage.includes('Catatan Cloud') || cloudSyncMessage.includes('Offline')
+              : cloudSyncMessage.includes('Catatan') || cloudSyncMessage.includes('Offline') || cloudSyncMessage.includes('belum dikonfigurasi')
                 ? 'bg-[#ffb95f]/15 border border-[#ffb95f]/40 text-[#ffb95f]'
                 : 'bg-[#0ea5e9]/10 border border-[#89ceff]/40 text-[#89ceff]'
           }`}>
-            {cloudSyncMessage.includes('Gagal') || cloudSyncMessage.includes('Peringatan') || cloudSyncMessage.includes('ditolak') || cloudSyncMessage.includes('tidak ditemukan') ? (
+            {cloudSyncMessage.includes('Gagal') || cloudSyncMessage.includes('Peringatan') || cloudSyncMessage.includes('ditolak') || cloudSyncMessage.includes('tidak valid') ? (
               <AlertCircle className="w-4 h-4 shrink-0 text-[#ffb4ab] mt-0.5 sm:mt-0" />
-            ) : cloudSyncMessage.includes('Catatan Cloud') || cloudSyncMessage.includes('Offline') ? (
+            ) : cloudSyncMessage.includes('Catatan') || cloudSyncMessage.includes('Offline') || cloudSyncMessage.includes('belum dikonfigurasi') ? (
               <Info className="w-4 h-4 shrink-0 text-[#ffb95f] mt-0.5 sm:mt-0" />
             ) : (
               <CheckCircle2 className="w-4 h-4 shrink-0 text-[#4edea3] mt-0.5 sm:mt-0" />
@@ -410,7 +416,7 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
           <div className="p-4 bg-[#ffb4ab]/10 border border-[#ffb4ab]/50 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-xs font-mono text-[#ffb4ab]">
               <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>Yakin ingin menghapus semua record timesheet di Firebase Firestore? Tindakan ini tidak dapat dibatalkan.</span>
+              <span>Yakin ingin membersihkan semua record timesheet di Supabase & Browser? Tindakan ini tidak dapat dibatalkan.</span>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
@@ -423,12 +429,12 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
               <button
                 type="button"
                 onClick={async () => {
-                  if (onClearFirebaseData) await onClearFirebaseData();
+                  if (onClearCloudData) await onClearCloudData();
                   setConfirmClearOpen(false);
                 }}
                 className="px-3 py-1 text-xs font-mono bg-[#ba1a1a] text-white rounded font-bold hover:bg-[#93000a]"
               >
-                Ya, Hapus Database
+                Ya, Bersihkan Database
               </button>
             </div>
           </div>
@@ -446,19 +452,19 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
           </div>
 
           <div className="bg-[#0f131c] p-3 rounded-lg border border-[#31353e]/60">
-            <span className="text-[#88929b] text-[10px] uppercase">Firebase Project ID</span>
-            <div className="font-bold text-[#89ceff] truncate mt-1" title={FIREBASE_PROJECT_ID}>
-              {FIREBASE_PROJECT_ID}
+            <span className="text-[#88929b] text-[10px] uppercase">Database Cloud</span>
+            <div className={`font-bold truncate mt-1 ${isSupabaseConfigured ? 'text-[#89ceff]' : 'text-[#ffb95f]'}`} title={SUPABASE_URL || 'Belum diisi'}>
+              {isSupabaseConfigured ? 'Supabase Connected' : 'Supabase Pending'}
             </div>
-            <span className="text-[10px] text-[#4edea3]">Cloud Firestore DB</span>
+            <span className="text-[10px] text-[#88929b]">{isSupabaseConfigured ? 'PostgreSQL Cloud DB' : 'IndexedDB Fallback'}</span>
           </div>
 
           <div className="bg-[#0f131c] p-3 rounded-lg border border-[#31353e]/60">
             <span className="text-[#88929b] text-[10px] uppercase">Tersimpan di Cloud</span>
             <div className="font-bold text-[#4edea3] text-base mt-0.5">
-              {firebaseRecordCount || records.length} <span className="text-xs text-[#88929b] font-normal">records</span>
+              {cloudRecordCount || records.length} <span className="text-xs text-[#88929b] font-normal">records</span>
             </div>
-            <span className="text-[10px] text-[#88929b]">Collection: timesheet_records</span>
+            <span className="text-[10px] text-[#88929b]">Table: timesheet_records</span>
           </div>
 
           <div className="bg-[#0f131c] p-3 rounded-lg border border-[#31353e]/60">
@@ -466,11 +472,11 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
             <div className="font-bold text-[#ffb95f] text-base mt-0.5">
               {uploadBatches.length} <span className="text-xs text-[#88929b] font-normal">files logged</span>
             </div>
-            <span className="text-[10px] text-[#88929b]">Collection: timesheet_batches</span>
+            <span className="text-[10px] text-[#88929b]">Table: timesheet_batches</span>
           </div>
         </div>
 
-        {/* Expandable Vercel & Firebase Deployment Guide */}
+        {/* Expandable Vercel & Supabase Deployment Guide */}
         <div className="mt-1">
           <button
             type="button"
@@ -478,52 +484,60 @@ export const TimesheetUploader: React.FC<TimesheetUploaderProps> = ({
             className="text-xs font-mono text-[#89ceff] hover:text-[#bde4ff] flex items-center gap-1.5 cursor-pointer"
           >
             <Info className="w-3.5 h-3.5" />
-            <span>{showVercelGuide ? 'Sembunyikan Panduan Pengaturan Vercel & Firebase' : 'Lihat Panduan Pengaturan Firebase saat Dideploy ke Vercel'}</span>
+            <span>{showVercelGuide ? 'Sembunyikan Panduan Pengaturan Vercel & Supabase' : 'Lihat Panduan Pengaturan Supabase saat Dideploy ke Vercel'}</span>
           </button>
 
           {showVercelGuide && (
             <div className="mt-3 p-4 bg-[#0f131c] border border-[#31353e] rounded-lg text-xs font-mono flex flex-col gap-3 text-[#dfe2ee]">
               <div className="font-bold text-[#4edea3] text-sm flex items-center gap-2">
                 <Database className="w-4 h-4 text-[#4edea3]" />
-                Solusi Persistensi Data di Vercel & Firebase
+                Solusi Persistensi Data di Vercel & Supabase
               </div>
 
               <div className="flex flex-col gap-1.5">
                 <span className="font-bold text-[#ffb95f]">1. Dual-Layer Persistence (Otomatis Aktif)</span>
                 <p className="text-[#88929b] leading-relaxed">
-                  Aplikasi kini dilengkapi sistem penyimpanan ganda: setiap file Excel yang diunggah otomatis disimpan ke <strong className="text-[#dfe2ee]">IndexedDB Browser</strong> secara instan, serta disinkronkan ke <strong className="text-[#dfe2ee]">Firebase Firestore</strong>. Dengan ini, me-refresh halaman di Vercel <span className="text-[#4edea3] font-bold">tidak akan pernah menghilangkan data</span>.
+                  Aplikasi dilengkapi sistem penyimpanan ganda: setiap file Excel yang diunggah otomatis disimpan ke <strong className="text-[#dfe2ee]">IndexedDB Browser</strong> secara instan, serta disinkronkan ke <strong className="text-[#dfe2ee]">Supabase PostgreSQL</strong>. Dengan ini, me-refresh halaman di Vercel <span className="text-[#4edea3] font-bold">tidak akan menghilangkan data Anda</span>.
                 </p>
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <span className="font-bold text-[#89ceff]">2. Security Rules di Firebase Console</span>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[#89ceff]">2. Jalankan SQL Schema di Supabase SQL Editor</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
+                      setCopiedSQL(true);
+                      setTimeout(() => setCopiedSQL(false), 2000);
+                    }}
+                    className="px-2 py-0.5 bg-[#1c2028] hover:bg-[#262a33] text-[#4edea3] rounded border border-[#4edea3]/40 text-[10px] cursor-pointer"
+                  >
+                    {copiedSQL ? '✓ Tersalin!' : 'Salin SQL Schema'}
+                  </button>
+                </div>
                 <p className="text-[#88929b] leading-relaxed">
-                  Jika Anda menghubungkan project Firebase pribadi dan muncul pesan <code className="text-[#ffb4ab]">permission-denied</code>, buka <strong className="text-[#dfe2ee]">Firebase Console &gt; Firestore Database &gt; Rules</strong>, lalu pastikan aturan mengizinkan read & write:
+                  Buka project Supabase Anda, masuk ke menu <strong className="text-[#dfe2ee]">SQL Editor</strong>, lalu salin dan jalankan script SQL berikut untuk membuat tabel & hak akses otomatis:
                 </p>
-                <pre className="bg-[#181c24] p-2.5 rounded border border-[#31353e] text-[11px] text-[#4edea3] overflow-x-auto">
-{`rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
-    }
-  }
-}`}
+                <pre className="bg-[#181c24] p-2.5 rounded border border-[#31353e] text-[11px] text-[#4edea3] overflow-x-auto max-h-48">
+{SUPABASE_SQL_SCHEMA}
                 </pre>
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <span className="font-bold text-[#89ceff]">3. Environment Variables di Vercel (Opsional)</span>
+                <span className="font-bold text-[#89ceff]">3. Environment Variables di Vercel</span>
                 <p className="text-[#88929b] leading-relaxed">
-                  Jika Anda ingin menggunakan Firebase Project milik Anda sendiri di Vercel, tambahkan variabel ini di <strong className="text-[#dfe2ee]">Vercel Dashboard &gt; Project Settings &gt; Environment Variables</strong>:
+                  Di dashboard Vercel Anda (<strong className="text-[#dfe2ee]">Project Settings &gt; Environment Variables</strong>), masukkan 2 variabel berikut:
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] text-[#88929b]">
-                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_PROJECT_ID</code></div>
-                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_API_KEY</code></div>
-                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_AUTH_DOMAIN</code></div>
-                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_STORAGE_BUCKET</code></div>
-                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_MESSAGING_SENDER_ID</code></div>
-                  <div><code className="text-[#dfe2ee]">VITE_FIREBASE_APP_ID</code></div>
+                  <div className="bg-[#181c24] p-2 rounded border border-[#31353e]">
+                    <span className="text-[10px] text-[#88929b] block">Project URL</span>
+                    <code className="text-[#dfe2ee]">VITE_SUPABASE_URL</code>
+                  </div>
+                  <div className="bg-[#181c24] p-2 rounded border border-[#31353e]">
+                    <span className="text-[10px] text-[#88929b] block">Anon / Public API Key</span>
+                    <code className="text-[#dfe2ee]">VITE_SUPABASE_ANON_KEY</code>
+                  </div>
                 </div>
               </div>
             </div>
